@@ -958,6 +958,20 @@ def index():
 </html>'''
     return html
 
+# Flask error handler - 500 hatalarını yakala (API route'ları için)
+@app.errorhandler(500)
+def handle_500(e):
+    """500 hatalarını yakala ve JSON döndür"""
+    logging.error(f"500 hatası: {e}", exc_info=True)
+    import traceback
+    traceback.print_exc()
+    return jsonify({
+        'success': True,  # Frontend handle edecek
+        'available': False,
+        'product_name': f'Beklenmeyen hata: {str(e)[:200]}',
+        'url': ''
+    }), 200
+
 @app.route('/api/check', methods=['POST'])
 def api_check():
     """Stok kontrolü"""
@@ -970,7 +984,7 @@ def api_check():
         if data is None:
             return jsonify({'success': False, 'message': 'JSON verisi eksik'}), 400
         
-        url = data.get('url', '').strip()
+        url = data.get('url', '').strip() if data else ''
         
         if not url:
             return jsonify({'success': False, 'message': 'URL gerekli'}), 400
@@ -1020,10 +1034,18 @@ def api_check():
         logging.error(f"API check genel hatası: {e}", exc_info=True)
         import traceback
         traceback.print_exc()
+        # 500 yerine 200 döndür, frontend handle edecek
+        url_value = ''
+        try:
+            url_value = url if 'url' in locals() else ''
+        except:
+            pass
         return jsonify({
-            'success': False, 
-            'message': f'Sunucu hatası: {str(e)}'
-        }), 500
+            'success': True, 
+            'available': False,
+            'product_name': f'Sunucu hatası: {str(e)[:200]}',
+            'url': url_value
+        }), 200
 
 @app.route('/api/track', methods=['POST'])
 def api_track():
