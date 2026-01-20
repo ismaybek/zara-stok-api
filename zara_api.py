@@ -17,11 +17,41 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import requests
 
 app = Flask(__name__)
 CORS(app)
+
+# Render.com için otomatik heartbeat başlat
+def init_heartbeat():
+    """Render.com ortamında otomatik heartbeat başlat"""
+    global heartbeat_running, heartbeat_thread
+    
+    render_url = os.environ.get('RENDER_EXTERNAL_URL') or os.environ.get('SERVICE_URL')
+    if render_url and not heartbeat_running:
+        try:
+            logging.info(f"Render.com ortamı tespit edildi: {render_url}")
+            heartbeat_running = True
+            heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
+            heartbeat_thread.start()
+            logging.info("Heartbeat otomatik başlatıldı (Render.com için)")
+        except Exception as e:
+            logging.error(f"Heartbeat başlatılamadı: {e}")
+
+# İlk istek geldiğinde heartbeat başlat (Render.com için)
+# Bu şekilde Flask tamamen başladıktan sonra başlar
+_heartbeat_initialized = False
+
+@app.before_request
+def before_request():
+    """Her istekten önce heartbeat'i başlat (sadece ilk seferinde)"""
+    global _heartbeat_initialized
+    if not _heartbeat_initialized:
+        render_url = os.environ.get('RENDER_EXTERNAL_URL') or os.environ.get('SERVICE_URL')
+        if render_url:
+            init_heartbeat()
+        _heartbeat_initialized = True
 
 # Logging ayarları
 logging.basicConfig(
@@ -818,15 +848,7 @@ def api_bot_status():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     
-    # Render.com'da otomatik heartbeat başlat (opsiyonel)
-    # Eğer isterseniz servis her zaman uyanık kalsın
-    render_url = os.environ.get('RENDER_EXTERNAL_URL') or os.environ.get('SERVICE_URL')
-    if render_url:
-        logging.info(f"Render.com ortamı tespit edildi: {render_url}")
-        # Heartbeat'i otomatik başlat (servis her zaman uyanık kalsın)
-        heartbeat_running = True
-        heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
-        heartbeat_thread.start()
-        logging.info("Heartbeat otomatik başlatıldı (Render.com için)")
+    # Yerel çalıştırma için heartbeat başlat
+    init_heartbeat()
     
     app.run(host='0.0.0.0', port=port, debug=False)
