@@ -105,16 +105,56 @@ def get_driver():
                 chrome_options.binary_location = chrome_binary
                 logging.info(f"Chrome binary kullanılıyor: {chrome_binary}")
             
+            # Render.com için Chrome binary path kontrolü
+            import shutil
+            chrome_paths = [
+                '/usr/bin/google-chrome',
+                '/usr/bin/chromium-browser',
+                '/usr/bin/chromium',
+                '/snap/bin/chromium'
+            ]
+            
+            chrome_binary_found = None
+            for path in chrome_paths:
+                if shutil.which(path) or os.path.exists(path):
+                    chrome_binary_found = path
+                    chrome_options.binary_location = path
+                    logging.info(f"Chrome binary bulundu: {path}")
+                    break
+            
             # webdriver-manager ile ChromeDriver'ı otomatik indir
-            try:
-                service = Service(ChromeDriverManager().install())
-                driver = webdriver.Chrome(service=service, options=chrome_options)
-                logging.info("WebDriver başarıyla başlatıldı (webdriver-manager ile)")
-            except Exception as e1:
-                logging.warning(f"webdriver-manager ile başlatılamadı: {e1}, doğrudan deniyor...")
-                # Fallback: Doğrudan başlatmayı dene
-                driver = webdriver.Chrome(options=chrome_options)
-                logging.info("WebDriver başarıyla başlatıldı (doğrudan)")
+            # Önce Chrome binary bulunmalı, yoksa webdriver-manager hata verir
+            if chrome_binary_found:
+                try:
+                    # ChromeDriverManager cache path ayarla (Render.com için)
+                    os.environ['WDM_LOG_LEVEL'] = '0'  # Log seviyesini düşür
+                    
+                    # Chrome binary path'ini webdriver-manager'a söyle
+                    driver_path = ChromeDriverManager().install()
+                    if driver_path and os.path.exists(driver_path):
+                        service = Service(driver_path)
+                        driver = webdriver.Chrome(service=service, options=chrome_options)
+                        logging.info("WebDriver başarıyla başlatıldı (webdriver-manager ile)")
+                    else:
+                        raise Exception("ChromeDriverManager geçerli path döndürmedi")
+                except Exception as e1:
+                    logging.warning(f"webdriver-manager ile başlatılamadı: {e1}, doğrudan deniyor...")
+                    # Fallback: Doğrudan başlatmayı dene
+                    try:
+                        driver = webdriver.Chrome(options=chrome_options)
+                        logging.info("WebDriver başarıyla başlatıldı (doğrudan)")
+                    except Exception as e2:
+                        logging.error(f"Doğrudan başlatma da başarısız: {e2}")
+                        raise Exception(f"WebDriver başlatılamadı. webdriver-manager: {e1}, doğrudan: {e2}")
+            else:
+                # Chrome binary bulunamadı, doğrudan dene (webdriver-manager olmadan)
+                logging.warning("Chrome binary bulunamadı, doğrudan başlatmayı deniyor...")
+                try:
+                    driver = webdriver.Chrome(options=chrome_options)
+                    logging.info("WebDriver başarıyla başlatıldı (doğrudan, binary bulunamadı)")
+                except Exception as e:
+                    logging.error(f"Doğrudan başlatma başarısız: {e}")
+                    raise Exception(f"WebDriver başlatılamadı. Chrome binary bulunamadı ve doğrudan başlatma başarısız: {e}")
                 
         except Exception as e:
             logging.error(f"WebDriver başlatılamadı: {e}", exc_info=True)
@@ -184,8 +224,17 @@ def check_stock_logic(url_or_code):
         is_direct_url = False
     
     try:
-        driver.get(url)
-        time.sleep(4)  # Sayfanın yüklenmesi için bekle
+        # Sayfayı yükle - exception yakalama
+        try:
+            driver.get(url)
+            time.sleep(4)  # Sayfanın yüklenmesi için bekle
+        except Exception as e:
+            logging.error(f"Sayfa yüklenemedi ({url}): {e}")
+            return {
+                'available': False,
+                'product_name': f'Sayfa yüklenemedi: {str(e)[:100]}',
+                'url': url
+            }
         
         # Cookie bildirimini kapat (varsa)
         try:
@@ -255,9 +304,17 @@ def check_stock_logic(url_or_code):
             # Stok durumunu kontrol et - Zara'nın gerçek metinlerine göre
             stock_available = None  # None = henüz belirlenmedi
             
-            # Sayfa içeriğini al
-            page_source = driver.page_source
-            page_text = driver.find_element(By.TAG_NAME, "body").text
+            # Sayfa içeriğini al - exception yakalama
+            try:
+                page_source = driver.page_source
+                page_text = driver.find_element(By.TAG_NAME, "body").text
+            except Exception as e:
+                logging.error(f"Sayfa içeriği alınamadı: {e}")
+                return {
+                    'available': False,
+                    'product_name': f'Sayfa içeriği alınamadı: {str(e)[:100]}',
+                    'url': current_url
+                }
             
             # ÖNCELİK 1: "BENZER ÜRÜNLER TÜKENDİ" yazısını kontrol et (stokta yok)
             out_of_stock_indicators = [
@@ -954,18 +1011,50 @@ def api_tracking_list():
     """Takip listesi"""
     try:
         items = []
+        
+        # Tracking list boşsa direkt boş liste döndür
+        if not tracking_list:
+            return jsonify({'success': True, 'items': []})
+        
+        # Her URL için stok kontrolü yap
         for url in tracking_list:
-            result = check_stock_logic(url)
-            items.append({
-                'url': url,
-                'available': result['available'],
-                'product_name': result['product_name']
-            })
+            try:
+                result = check_stock_logic(url)
+                
+                # Result kontrolü
+                if not isinstance(result, dict):
+                    logging.warning(f"check_stock_logic beklenmeyen tip döndürdü: {type(result)}")
+                    items.append({
+                        'url': url,
+                        'available': False,
+                        'product_name': 'Hata: Beklenmeyen sonuç'
+                    })
+                    continue
+                
+                # Key kontrolü
+                items.append({
+                    'url': url,
+                    'available': result.get('available', False),
+                    'product_name': result.get('product_name', 'Ürün')
+                })
+            except Exception as e:
+                logging.error(f"Tracking list item hatası ({url}): {e}", exc_info=True)
+                # Hata olsa bile devam et, diğerlerini kontrol et
+                items.append({
+                    'url': url,
+                    'available': False,
+                    'product_name': f'Hata: {str(e)[:50]}'
+                })
         
         return jsonify({'success': True, 'items': items})
     except Exception as e:
-        logging.error(f"API tracking list hatası: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logging.error(f"API tracking list genel hatası: {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False, 
+            'message': f'Takip listesi yüklenemedi: {str(e)}'
+        }), 500
 
 @app.route('/api/bot/start', methods=['POST'])
 def api_bot_start():
@@ -1024,3 +1113,4 @@ if __name__ == '__main__':
         logging.warning(f"Heartbeat başlatılamadı (normal olabilir): {e}")
     
     app.run(host='0.0.0.0', port=port, debug=False)
+
