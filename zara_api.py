@@ -92,7 +92,8 @@ def get_driver():
             logging.info("WebDriver başarıyla başlatıldı")
         except Exception as e:
             logging.error(f"WebDriver başlatılamadı: {e}")
-            raise
+            # Driver None olarak kalır, check_stock_logic bunu handle edecek
+            return None
     return driver
 
 # zara_stock_bot.py'deki check_stock metodunu Flask fonksiyonuna adapte ettik
@@ -102,6 +103,14 @@ def check_stock_logic(url_or_code):
     zara_stock_bot.py'deki gelişmiş check_stock metodu kullanılıyor
     """
     driver = get_driver()
+    
+    # Driver başlatılamadıysa hata döndür
+    if driver is None:
+        return {
+            'available': False,
+            'product_name': 'WebDriver başlatılamadı',
+            'url': url_or_code if url_or_code.startswith('http') else ''
+        }
     
     # Eğer tam URL ise direkt kullan, değilse arama yap
     if url_or_code.startswith('http'):
@@ -606,7 +615,18 @@ def index():
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({url: url})
             })
-            .then(r => r.json())
+            .then(r => {
+                if (!r.ok) {
+                    throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+                }
+                const contentType = r.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    return r.text().then(text => {
+                        throw new Error('JSON bekleniyordu ama HTML geldi. Sunucu hatası olabilir.');
+                    });
+                }
+                return r.json();
+            })
             .then(data => {
                 if (data.success) {
                     const status = data.available ? '✅ STOKTA VAR' : '❌ STOKTA YOK';
@@ -617,6 +637,7 @@ def index():
             })
             .catch(e => {
                 showResult('checkResult', 'Bağlantı hatası: ' + e.message, 'error');
+                console.error('API Hatası:', e);
             });
         }
         
@@ -632,7 +653,18 @@ def index():
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({url: url})
             })
-            .then(r => r.json())
+            .then(r => {
+                if (!r.ok) {
+                    throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+                }
+                const contentType = r.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    return r.text().then(text => {
+                        throw new Error('JSON bekleniyordu ama HTML geldi. Sunucu hatası olabilir.');
+                    });
+                }
+                return r.json();
+            })
             .then(data => {
                 if (data.success) {
                     alert('Takip listesine eklendi!');
@@ -644,12 +676,22 @@ def index():
             })
             .catch(e => {
                 alert('Bağlantı hatası: ' + e.message);
+                console.error('API Hatası:', e);
             });
         }
         
         function startBot() {
             fetch('/api/bot/start', {method: 'POST'})
-            .then(r => r.json())
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+                const contentType = r.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    return r.text().then(text => {
+                        throw new Error('JSON bekleniyordu ama HTML geldi.');
+                    });
+                }
+                return r.json();
+            })
             .then(data => {
                 if (data.success) {
                     updateBotStatus(true);
@@ -660,12 +702,22 @@ def index():
             })
             .catch(e => {
                 alert('Bağlantı hatası: ' + e.message);
+                console.error('API Hatası:', e);
             });
         }
         
         function stopBot() {
             fetch('/api/bot/stop', {method: 'POST'})
-            .then(r => r.json())
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+                const contentType = r.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    return r.text().then(text => {
+                        throw new Error('JSON bekleniyordu ama HTML geldi.');
+                    });
+                }
+                return r.json();
+            })
             .then(data => {
                 if (data.success) {
                     updateBotStatus(false);
@@ -676,12 +728,22 @@ def index():
             })
             .catch(e => {
                 alert('Bağlantı hatası: ' + e.message);
+                console.error('API Hatası:', e);
             });
         }
         
         function loadTrackingList() {
             fetch('/api/tracking/list')
-            .then(r => r.json())
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+                const contentType = r.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    return r.text().then(text => {
+                        throw new Error('JSON bekleniyordu ama HTML geldi.');
+                    });
+                }
+                return r.json();
+            })
             .then(data => {
                 const listDiv = document.getElementById('trackingList');
                 if (data.items && data.items.length > 0) {
@@ -698,6 +760,7 @@ def index():
             })
             .catch(e => {
                 document.getElementById('trackingList').innerHTML = '<p>Yüklenemedi: ' + e.message + '</p>';
+                console.error('API Hatası:', e);
             });
         }
         
@@ -726,14 +789,24 @@ def index():
         
         // Sayfa yüklendiğinde durumu kontrol et
         fetch('/api/bot/status')
-        .then(r => r.json())
+        .then(r => {
+            if (!r.ok) return null;
+            const contentType = r.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                return null;
+            }
+            return r.json();
+        })
         .then(data => {
-            if (data.running) {
+            if (data && data.running) {
                 updateBotStatus(true);
             }
             loadTrackingList();
         })
-        .catch(() => {});
+        .catch(e => {
+            console.error('Bot durum kontrolü hatası:', e);
+            loadTrackingList();
+        });
     </script>
 </body>
 </html>'''
@@ -852,3 +925,5 @@ if __name__ == '__main__':
     init_heartbeat()
     
     app.run(host='0.0.0.0', port=port, debug=False)
+
+
