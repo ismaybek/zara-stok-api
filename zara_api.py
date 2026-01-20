@@ -172,33 +172,36 @@ def check_stock_logic(url_or_code):
     """
     global driver
     
-    # Driver'ı başlat - exception yakalama
+    # Driver'ı başlat - exception yakalama (TÜM HATALARI YAKALA)
     try:
         driver = get_driver()
     except Exception as e:
+        error_msg = str(e)[:200]  # Mesajı kısalt
         logging.error(f"get_driver hatası: {e}")
         return {
             'available': False,
-            'product_name': f'WebDriver başlatılamadı: {str(e)}',
+            'product_name': f'WebDriver başlatılamadı: {error_msg}',
             'url': url_or_code if url_or_code.startswith('http') else ''
         }
     
     # Driver başlatılamadıysa hata döndür
     if driver is None:
+        logging.error("Driver None döndü")
         return {
             'available': False,
-            'product_name': 'WebDriver başlatılamadı (None döndü)',
+            'product_name': 'WebDriver başlatılamadı (Chrome/ChromeDriver kurulu değil)',
             'url': url_or_code if url_or_code.startswith('http') else ''
         }
     
     # Driver'ın çalışıp çalışmadığını kontrol et
     try:
         # Basit bir test - eğer driver çalışmıyorsa exception fırlatır
-        driver.current_url
+        _ = driver.current_url
     except Exception as e:
         logging.error(f"Driver çalışmıyor: {e}")
         # Driver'ı yeniden başlatmayı dene
         try:
+            global driver
             driver = None  # Reset
             driver = get_driver()
             if driver is None:
@@ -208,10 +211,11 @@ def check_stock_logic(url_or_code):
                     'url': url_or_code if url_or_code.startswith('http') else ''
                 }
         except Exception as e2:
+            error_msg = str(e2)[:200]
             logging.error(f"Driver yeniden başlatılamadı: {e2}")
             return {
                 'available': False,
-                'product_name': f'WebDriver hatası: {str(e2)}',
+                'product_name': f'WebDriver hatası: {error_msg}',
                 'url': url_or_code if url_or_code.startswith('http') else ''
             }
     
@@ -735,28 +739,51 @@ def index():
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({url: url})
             })
-            .then(r => {
+            .then(async r => {
+                // HTTP status kontrolü
                 if (!r.ok) {
-                    throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+                    // Response body'yi oku (hata mesajı için)
+                    let errorMsg = `HTTP ${r.status}`;
+                    try {
+                        const errorText = await r.text();
+                        if (errorText) {
+                            try {
+                                const errorJson = JSON.parse(errorText);
+                                errorMsg = errorJson.message || errorJson.error || errorMsg;
+                            } catch {
+                                // JSON değilse ilk 200 karakteri al
+                                errorMsg = errorText.substring(0, 200);
+                            }
+                        }
+                    } catch {
+                        errorMsg = r.statusText || `HTTP ${r.status}`;
+                    }
+                    throw new Error(errorMsg);
                 }
+                
+                // Content-Type kontrolü
                 const contentType = r.headers.get('content-type');
                 if (!contentType || !contentType.includes('application/json')) {
-                    return r.text().then(text => {
-                        throw new Error('JSON bekleniyordu ama HTML geldi. Sunucu hatası olabilir.');
-                    });
+                    const text = await r.text();
+                    throw new Error('JSON bekleniyordu ama HTML geldi. Sunucu hatası olabilir.');
                 }
+                
                 return r.json();
             })
             .then(data => {
-                if (data.success) {
+                if (data && data.success !== false) {
                     const status = data.available ? '✅ STOKTA VAR' : '❌ STOKTA YOK';
-                    showResult('checkResult', `${status}<br>${data.product_name}<br><a href="${data.url}" target="_blank">Ürün Linki</a>`, data.available ? 'success' : 'error');
+                    const productName = data.product_name || 'Ürün';
+                    const productUrl = data.url || '';
+                    showResult('checkResult', `${status}<br>${productName}<br>${productUrl ? '<a href="' + productUrl + '" target="_blank">Ürün Linki</a>' : ''}`, data.available ? 'success' : 'error');
                 } else {
-                    showResult('checkResult', data.message || 'Hata oluştu', 'error');
+                    const errorMsg = (data && data.message) ? data.message : 'Hata oluştu';
+                    showResult('checkResult', errorMsg, 'error');
                 }
             })
             .catch(e => {
-                showResult('checkResult', 'Bağlantı hatası: ' + e.message, 'error');
+                const errorMsg = e.message || 'Bilinmeyen hata';
+                showResult('checkResult', 'Bağlantı hatası: ' + errorMsg, 'error');
                 console.error('API Hatası:', e);
             });
         }
@@ -956,13 +983,22 @@ def api_check():
             # Result dictionary kontrolü
             if not isinstance(result, dict):
                 logging.error(f"check_stock_logic beklenmeyen tip döndürdü: {type(result)}")
-                return jsonify({'success': False, 'message': 'Stok kontrolü beklenmeyen sonuç döndürdü'}), 500
+                return jsonify({
+                    'success': True,  # Frontend'de handle edilecek
+                    'available': False,
+                    'product_name': 'Hata: Beklenmeyen sonuç',
+                    'url': url
+                }), 200  # 500 yerine 200
             
-            # Gerekli key'lerin varlığını kontrol et
-            if 'available' not in result or 'product_name' not in result or 'url' not in result:
-                logging.error(f"check_stock_logic eksik key'ler döndürdü: {result.keys()}")
-                return jsonify({'success': False, 'message': 'Stok kontrolü eksik bilgi döndürdü'}), 500
+            # Gerekli key'lerin varlığını kontrol et ve varsayılan değerler ekle
+            if 'available' not in result:
+                result['available'] = False
+            if 'product_name' not in result:
+                result['product_name'] = 'Ürün'
+            if 'url' not in result:
+                result['url'] = url
             
+            # Her zaman success: true döndür, available durumuna göre frontend karar versin
             return jsonify({
                 'success': True,
                 'available': result['available'],
@@ -973,10 +1009,13 @@ def api_check():
             logging.error(f"check_stock_logic hatası: {e}", exc_info=True)
             import traceback
             traceback.print_exc()
+            # Exception olsa bile JSON döndür, 500 yerine 200
             return jsonify({
-                'success': False, 
-                'message': f'Stok kontrolü sırasında hata: {str(e)}'
-            }), 500
+                'success': True,  # Frontend'de handle edilecek
+                'available': False,
+                'product_name': f'Hata: {str(e)[:100]}',
+                'url': url
+            }), 200  # 500 yerine 200
         
     except Exception as e:
         logging.error(f"API check genel hatası: {e}", exc_info=True)
