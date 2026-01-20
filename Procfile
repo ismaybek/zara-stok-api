@@ -1,2 +1,2 @@
-web: python zara_api.py
+web: gunicorn zara_api:app
 
