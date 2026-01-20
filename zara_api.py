@@ -102,6 +102,8 @@ def check_stock_logic(url_or_code):
     Belirli bir stok kodunun veya URL'in stok durumunu kontrol et
     zara_stock_bot.py'deki gelişmiş check_stock metodu kullanılıyor
     """
+    global driver
+    
     # Driver'ı başlat - exception yakalama
     try:
         driver = get_driver()
@@ -129,7 +131,6 @@ def check_stock_logic(url_or_code):
         logging.error(f"Driver çalışmıyor: {e}")
         # Driver'ı yeniden başlatmayı dene
         try:
-            global driver
             driver = None  # Reset
             driver = get_driver()
             if driver is None:
