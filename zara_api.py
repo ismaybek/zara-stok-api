@@ -17,7 +17,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from webdriver_manager.chrome import ChromeDriverManager
 import requests
 
 app = Flask(__name__)
@@ -48,10 +50,14 @@ def before_request():
     """Her istekten önce heartbeat'i başlat (sadece ilk seferinde)"""
     global _heartbeat_initialized
     if not _heartbeat_initialized:
-        render_url = os.environ.get('RENDER_EXTERNAL_URL') or os.environ.get('SERVICE_URL')
-        if render_url:
-            init_heartbeat()
-        _heartbeat_initialized = True
+        try:
+            render_url = os.environ.get('RENDER_EXTERNAL_URL') or os.environ.get('SERVICE_URL')
+            if render_url:
+                init_heartbeat()
+        except Exception as e:
+            logging.warning(f"Heartbeat başlatılamadı (normal olabilir): {e}")
+        finally:
+            _heartbeat_initialized = True
 
 # Logging ayarları
 logging.basicConfig(
@@ -83,15 +89,37 @@ def get_driver():
         try:
             chrome_options = Options()
             chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--headless=new')  # Yeni headless mod
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
+            chrome_options.add_argument('--disable-gpu')
             chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+            chrome_options.add_argument('--disable-software-rasterizer')
+            chrome_options.add_argument('--disable-extensions')
             chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
             
-            driver = webdriver.Chrome(options=chrome_options)
-            logging.info("WebDriver başarıyla başlatıldı")
+            # Render.com için binary location belirt (opsiyonel)
+            import os
+            chrome_binary = os.environ.get('GOOGLE_CHROME_BIN')
+            if chrome_binary:
+                chrome_options.binary_location = chrome_binary
+                logging.info(f"Chrome binary kullanılıyor: {chrome_binary}")
+            
+            # webdriver-manager ile ChromeDriver'ı otomatik indir
+            try:
+                service = Service(ChromeDriverManager().install())
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+                logging.info("WebDriver başarıyla başlatıldı (webdriver-manager ile)")
+            except Exception as e1:
+                logging.warning(f"webdriver-manager ile başlatılamadı: {e1}, doğrudan deniyor...")
+                # Fallback: Doğrudan başlatmayı dene
+                driver = webdriver.Chrome(options=chrome_options)
+                logging.info("WebDriver başarıyla başlatıldı (doğrudan)")
+                
         except Exception as e:
-            logging.error(f"WebDriver başlatılamadı: {e}")
+            logging.error(f"WebDriver başlatılamadı: {e}", exc_info=True)
+            import traceback
+            traceback.print_exc()
             # Driver None olarak kalır, check_stock_logic bunu handle edecek
             return None
     return driver
@@ -989,7 +1017,10 @@ def api_bot_status():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     
-    # Yerel çalıştırma için heartbeat başlat
-    init_heartbeat()
+    # Yerel çalıştırma için heartbeat başlat (hata olursa devam et)
+    try:
+        init_heartbeat()
+    except Exception as e:
+        logging.warning(f"Heartbeat başlatılamadı (normal olabilir): {e}")
     
     app.run(host='0.0.0.0', port=port, debug=False)
