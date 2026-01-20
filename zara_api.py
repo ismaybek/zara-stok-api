@@ -102,15 +102,49 @@ def check_stock_logic(url_or_code):
     Belirli bir stok kodunun veya URL'in stok durumunu kontrol et
     zara_stock_bot.py'deki gelişmiş check_stock metodu kullanılıyor
     """
-    driver = get_driver()
+    # Driver'ı başlat - exception yakalama
+    try:
+        driver = get_driver()
+    except Exception as e:
+        logging.error(f"get_driver hatası: {e}")
+        return {
+            'available': False,
+            'product_name': f'WebDriver başlatılamadı: {str(e)}',
+            'url': url_or_code if url_or_code.startswith('http') else ''
+        }
     
     # Driver başlatılamadıysa hata döndür
     if driver is None:
         return {
             'available': False,
-            'product_name': 'WebDriver başlatılamadı',
+            'product_name': 'WebDriver başlatılamadı (None döndü)',
             'url': url_or_code if url_or_code.startswith('http') else ''
         }
+    
+    # Driver'ın çalışıp çalışmadığını kontrol et
+    try:
+        # Basit bir test - eğer driver çalışmıyorsa exception fırlatır
+        driver.current_url
+    except Exception as e:
+        logging.error(f"Driver çalışmıyor: {e}")
+        # Driver'ı yeniden başlatmayı dene
+        try:
+            global driver
+            driver = None  # Reset
+            driver = get_driver()
+            if driver is None:
+                return {
+                    'available': False,
+                    'product_name': 'WebDriver yeniden başlatılamadı',
+                    'url': url_or_code if url_or_code.startswith('http') else ''
+                }
+        except Exception as e2:
+            logging.error(f"Driver yeniden başlatılamadı: {e2}")
+            return {
+                'available': False,
+                'product_name': f'WebDriver hatası: {str(e2)}',
+                'url': url_or_code if url_or_code.startswith('http') else ''
+            }
     
     # Eğer tam URL ise direkt kullan, değilse arama yap
     if url_or_code.startswith('http'):
@@ -816,23 +850,56 @@ def index():
 def api_check():
     """Stok kontrolü"""
     try:
+        # Content-Type kontrolü
+        if not request.is_json:
+            return jsonify({'success': False, 'message': 'Content-Type application/json olmalı'}), 400
+        
         data = request.json
+        if data is None:
+            return jsonify({'success': False, 'message': 'JSON verisi eksik'}), 400
+        
         url = data.get('url', '').strip()
         
         if not url:
             return jsonify({'success': False, 'message': 'URL gerekli'}), 400
         
-        result = check_stock_logic(url)
+        # check_stock_logic çağrısı - exception yakalama
+        try:
+            result = check_stock_logic(url)
+            
+            # Result dictionary kontrolü
+            if not isinstance(result, dict):
+                logging.error(f"check_stock_logic beklenmeyen tip döndürdü: {type(result)}")
+                return jsonify({'success': False, 'message': 'Stok kontrolü beklenmeyen sonuç döndürdü'}), 500
+            
+            # Gerekli key'lerin varlığını kontrol et
+            if 'available' not in result or 'product_name' not in result or 'url' not in result:
+                logging.error(f"check_stock_logic eksik key'ler döndürdü: {result.keys()}")
+                return jsonify({'success': False, 'message': 'Stok kontrolü eksik bilgi döndürdü'}), 500
+            
+            return jsonify({
+                'success': True,
+                'available': result['available'],
+                'product_name': result['product_name'],
+                'url': result['url']
+            })
+        except Exception as e:
+            logging.error(f"check_stock_logic hatası: {e}", exc_info=True)
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                'success': False, 
+                'message': f'Stok kontrolü sırasında hata: {str(e)}'
+            }), 500
         
-        return jsonify({
-            'success': True,
-            'available': result['available'],
-            'product_name': result['product_name'],
-            'url': result['url']
-        })
     except Exception as e:
-        logging.error(f"API check hatası: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logging.error(f"API check genel hatası: {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False, 
+            'message': f'Sunucu hatası: {str(e)}'
+        }), 500
 
 @app.route('/api/track', methods=['POST'])
 def api_track():
@@ -925,5 +992,3 @@ if __name__ == '__main__':
     init_heartbeat()
     
     app.run(host='0.0.0.0', port=port, debug=False)
-
-
