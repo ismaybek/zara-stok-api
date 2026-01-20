@@ -201,8 +201,7 @@ def check_stock_logic(url_or_code):
         logging.error(f"Driver çalışmıyor: {e}")
         # Driver'ı yeniden başlatmayı dene
         try:
-            global driver
-            driver = None  # Reset
+            driver = None  # Reset (global zaten tanımlı)
             driver = get_driver()
             if driver is None:
                 return {
@@ -1152,4 +1151,3 @@ if __name__ == '__main__':
         logging.warning(f"Heartbeat başlatılamadı (normal olabilir): {e}")
     
     app.run(host='0.0.0.0', port=port, debug=False)
-
